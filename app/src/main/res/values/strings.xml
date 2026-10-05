@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Nova</string>
+    <string name="nova_accessibility_label">Nova Accessibility Automation</string>
+    <string name="nova_accessibility_description">Allows Nova to inspect active screen UI elements on demand and perform user-requested clicks, text input, and navigation across apps with real-state verification. Password fields and sensitive codes are automatically redacted.</string>
+    <string name="nova_notification_listener_label">Nova Notification Reader</string>
+    <string name="nova_active_task_channel_name">Nova Active Automation</string>
+    <string name="nova_active_task_notification_title">Nova is executing a task</string>
+    <string name="nova_stop_task">Stop Task</string>
+    <string name="tab_assistant">Assistant</string>
+    <string name="tab_screen">Screen &amp; Apps</string>
+    <string name="tab_permissions">System &amp; Perms</string>
+    <string name="tab_memory">Memory &amp; Logs</string>
+    <string name="tab_settings">Settings</string>
+    <string name="security_warning_apk_keys">Security Warning: API keys configured via BuildConfig are packaged for prototype use. Android APKs can be decompiled; do not share this APK publicly if valid keys are configured.</string>
+</resources>

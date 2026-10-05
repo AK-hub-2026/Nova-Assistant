@@ -1,0 +1,6 @@
+{
+  "name": "Nova",
+  "description": "Voice-first Android AI assistant with real device control, Accessibility automation, multi-provider AI routing, and low-RAM optimization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
