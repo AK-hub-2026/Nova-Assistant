@@ -2755,8 +2755,8 @@ class ExampleUnitTest {
         val content = workflowFile!!.readText()
         assertTrue(content.contains("assembleDebug"))
         assertTrue(content.contains("testDebugUnitTest"))
-        assertTrue(content.contains("actions/checkout@v4"))
-        assertTrue(content.contains("actions/setup-java@v4"))
+        assertTrue(content.contains("actions/checkout@v5"))
+        assertTrue(content.contains("actions/setup-java@v5"))
         assertTrue(content.contains("actions/upload-artifact@v4"))
     }
 }
