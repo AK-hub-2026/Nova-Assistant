@@ -26,7 +26,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class ExampleRobolectricTest {
 
     @Test
@@ -257,7 +257,7 @@ class ExampleRobolectricTest {
         assertTrue(initialOutcome is com.example.nova.tools.DeviceInfoQueryOutcome.Success)
         val initialInfo = (initialOutcome as com.example.nova.tools.DeviceInfoQueryOutcome.Success).deviceInfo
         assertTrue(initialInfo.sdkInt.isAvailable)
-        assertEquals(36, initialInfo.sdkInt.valueOrNull())
+        assertEquals(android.os.Build.VERSION.SDK_INT, initialInfo.sdkInt.valueOrNull())
         assertFalse(initialInfo.totalStorageBytes.isAvailable)
 
         // Register real filesystem block counts in Robolectric ShadowStatFs and verify real StatFs reading
@@ -269,7 +269,7 @@ class ExampleRobolectricTest {
             val deviceInfo = (outcome as com.example.nova.tools.DeviceInfoQueryOutcome.Success).deviceInfo
 
             assertTrue(deviceInfo.sdkInt.isAvailable)
-            assertEquals(36, deviceInfo.sdkInt.valueOrNull())
+            assertEquals(android.os.Build.VERSION.SDK_INT, deviceInfo.sdkInt.valueOrNull())
             assertTrue(deviceInfo.totalStorageBytes.isAvailable)
             assertTrue((deviceInfo.totalStorageBytes.valueOrNull() ?: 0L) > 0L)
             assertTrue(deviceInfo.availableStorageBytes.isAvailable)
