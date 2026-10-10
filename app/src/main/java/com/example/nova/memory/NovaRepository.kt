@@ -106,4 +106,34 @@ class NovaRepository(private val database: NovaDatabase) {
 
     suspend fun deleteReminder(id: Long) =
         database.scheduledReminderDao().deleteReminderById(id)
+
+    val voiceSessionLogs: Flow<List<VoiceSessionLogEntity>> =
+        database.voiceSessionLogDao().observeAllVoiceLogs()
+
+    suspend fun recordVoiceSessionLog(
+        sessionType: String,
+        userUtterance: String,
+        assistantResponse: String,
+        sttEngine: String = "Android SpeechRecognizer",
+        ttsProvider: String = "ElevenLabs",
+        voiceId: String = "Rachel",
+        ttsStatus: String = "SYNTHESIZED",
+        latencyMs: Long = 0L,
+        errorMessage: String = ""
+    ): Long = database.voiceSessionLogDao().insertVoiceLog(
+        VoiceSessionLogEntity(
+            sessionType = sessionType,
+            userUtterance = userUtterance,
+            assistantResponse = assistantResponse,
+            sttEngine = sttEngine,
+            ttsProvider = ttsProvider,
+            voiceId = voiceId,
+            ttsStatus = ttsStatus,
+            latencyMs = latencyMs,
+            errorMessage = errorMessage
+        )
+    )
+
+    suspend fun clearVoiceSessionLogs() =
+        database.voiceSessionLogDao().clearAllVoiceLogs()
 }

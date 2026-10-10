@@ -65,3 +65,16 @@ interface ScheduledReminderDao {
     @Query("DELETE FROM scheduled_reminders WHERE id = :id")
     suspend fun deleteReminderById(id: Long)
 }
+
+@Dao
+interface VoiceSessionLogDao {
+    @Query("SELECT * FROM voice_session_logs ORDER BY timestampMs DESC")
+    fun observeAllVoiceLogs(): Flow<List<VoiceSessionLogEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertVoiceLog(log: VoiceSessionLogEntity): Long
+
+    @Query("DELETE FROM voice_session_logs")
+    suspend fun clearAllVoiceLogs()
+}
+

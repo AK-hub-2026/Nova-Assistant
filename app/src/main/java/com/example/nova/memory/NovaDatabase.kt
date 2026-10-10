@@ -10,9 +10,10 @@ import androidx.room.RoomDatabase
         ConversationTurnEntity::class,
         MemoryFactEntity::class,
         TaskAuditLogEntity::class,
-        ScheduledReminderEntity::class
+        ScheduledReminderEntity::class,
+        VoiceSessionLogEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class NovaDatabase : RoomDatabase() {
@@ -20,6 +21,7 @@ abstract class NovaDatabase : RoomDatabase() {
     abstract fun memoryFactDao(): MemoryFactDao
     abstract fun taskAuditLogDao(): TaskAuditLogDao
     abstract fun scheduledReminderDao(): ScheduledReminderDao
+    abstract fun voiceSessionLogDao(): VoiceSessionLogDao
 
     companion object {
         @Volatile

@@ -16,6 +16,10 @@ data class NovaRuntimeSettings(
     val openAiModel: String = NovaProviderModelConfig.DEFAULT_OPENAI_MODEL_ID,
     val openAiBaseUrl: String = "https://api.openai.com/v1/",
     val spokenResponsesEnabled: Boolean = true,
+    val ttsProvider: com.example.nova.core.VoiceTtsProvider = com.example.nova.core.VoiceTtsProvider.ELEVEN_LABS,
+    val elevenLabsVoiceId: String = "21m00Tcm4TlvDq8ikWAM",
+    val allowLocalTtsFallback: Boolean = true,
+    val continuousListeningEnabled: Boolean = true,
     val lowRamModeOverride: Boolean? = null, // null = auto-detect from ActivityManager
     val requireConfirmationForSensitiveActions: Boolean = true,
     val showAccessibilityFloatingHud: Boolean = true,
@@ -64,6 +68,11 @@ class NovaPreferences(context: Context) {
             customName = customName
         )
 
+        val ttsProviderName = prefs.getString("tts_provider", com.example.nova.core.VoiceTtsProvider.ELEVEN_LABS.name)
+            ?: com.example.nova.core.VoiceTtsProvider.ELEVEN_LABS.name
+        val ttsProvider = runCatching { com.example.nova.core.VoiceTtsProvider.valueOf(ttsProviderName) }
+            .getOrDefault(com.example.nova.core.VoiceTtsProvider.ELEVEN_LABS)
+
         return NovaRuntimeSettings(
             primaryProvider = provider,
             enableCloudFallback = prefs.getBoolean("enable_cloud_fallback", true),
@@ -75,6 +84,10 @@ class NovaPreferences(context: Context) {
             openAiBaseUrl = prefs.getString("openai_base_url", "https://api.openai.com/v1/")
                 ?: "https://api.openai.com/v1/",
             spokenResponsesEnabled = prefs.getBoolean("spoken_responses_enabled", true),
+            ttsProvider = ttsProvider,
+            elevenLabsVoiceId = prefs.getString("elevenlabs_voice_id", "21m00Tcm4TlvDq8ikWAM") ?: "21m00Tcm4TlvDq8ikWAM",
+            allowLocalTtsFallback = prefs.getBoolean("allow_local_tts_fallback", true),
+            continuousListeningEnabled = prefs.getBoolean("continuous_listening_enabled", true),
             lowRamModeOverride = lowRamOverride,
             requireConfirmationForSensitiveActions = prefs.getBoolean(
                 "require_confirmation_sensitive",
@@ -98,6 +111,26 @@ class NovaPreferences(context: Context) {
 
     fun updateSpokenResponses(enabled: Boolean) {
         prefs.edit().putBoolean("spoken_responses_enabled", enabled).apply()
+        _settings.value = loadSettings()
+    }
+
+    fun updateTtsProvider(provider: com.example.nova.core.VoiceTtsProvider) {
+        prefs.edit().putString("tts_provider", provider.name).apply()
+        _settings.value = loadSettings()
+    }
+
+    fun updateElevenLabsVoiceId(voiceId: String) {
+        prefs.edit().putString("elevenlabs_voice_id", voiceId.trim()).apply()
+        _settings.value = loadSettings()
+    }
+
+    fun updateAllowLocalTtsFallback(allowed: Boolean) {
+        prefs.edit().putBoolean("allow_local_tts_fallback", allowed).apply()
+        _settings.value = loadSettings()
+    }
+
+    fun updateContinuousListening(enabled: Boolean) {
+        prefs.edit().putBoolean("continuous_listening_enabled", enabled).apply()
         _settings.value = loadSettings()
     }
 

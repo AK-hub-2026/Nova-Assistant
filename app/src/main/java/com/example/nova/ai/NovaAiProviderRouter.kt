@@ -1,5 +1,6 @@
 package com.example.nova.ai
 
+import android.content.Context
 import com.example.BuildConfig
 import com.example.nova.core.AiProviderType
 import com.example.nova.core.ExecutionChannel
@@ -11,6 +12,7 @@ import com.example.nova.memory.ConversationTurnEntity
 import com.example.nova.memory.MemoryFactEntity
 import com.example.nova.memory.NovaRuntimeSettings
 import com.example.nova.security.PermissionAuditor
+import com.example.nova.security.ProviderSecretVault
 import com.example.nova.security.SensitiveDataRedactor
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -60,7 +62,9 @@ sealed class ProviderPlanOutcome {
  * - HTTP connection reuse via single shared OkHttpClient.
  * - Monotonic latency instrumentation tracking time-to-first-token.
  */
-class NovaAiProviderRouter {
+class NovaAiProviderRouter(
+    private val context: Context? = null
+) {
 
     private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -155,103 +159,84 @@ class NovaAiProviderRouter {
         val systemInstruction = buildSystemPrompt(screenSnapshot, memoryFacts)
         val conversationPrompt = buildUserConversationPrompt(userUtterance, recentTurns)
 
-        val providerChain = buildProviderChain(settings)
-        var lastFailureMessage = "No configured AI provider available."
-        var attemptedConfiguredProvider = false
+        val primaryProvider = settings.primaryProvider
+        val primaryKey = getProviderKey(primaryProvider)
 
-        for (provider in providerChain) {
-            when (provider) {
-                AiProviderType.GEMINI -> {
-                    val key = runCatching { BuildConfig.GEMINI_API_KEY }.getOrNull()
-                    if (!PermissionAuditor.isKeyConfigured(key)) {
-                        lastFailureMessage = "GEMINI_API_KEY is not configured. Add your Gemini API key in the AI Studio Secrets panel (.env)."
-                        continue
+        if (!PermissionAuditor.isKeyConfigured(primaryKey)) {
+            val configMsg = when (primaryProvider) {
+                AiProviderType.GEMINI -> "GEMINI_API_KEY is not configured. Add your Gemini API key in the AI Studio Secrets panel (.env) or in Settings."
+                AiProviderType.GROQ -> "GROQ_API_KEY is not configured in the AI Studio Secrets panel (.env) or in Settings."
+                AiProviderType.OPENAI_COMPATIBLE -> "OPENAI_API_KEY is not configured in the AI Studio Secrets panel (.env) or in Settings."
+                AiProviderType.OFFLINE_DETERMINISTIC -> "Local offline deterministic parser active."
+            }
+            return@withContext ProviderPlanOutcome.ConfigurationOrNetworkRequired(
+                statusCode = "CONFIGURATION_REQUIRED",
+                message = configMsg
+            )
+        }
+
+        var primaryFailureReason = "Primary provider ${primaryProvider.displayName} failed to respond."
+        LatencyTracker.onAiRequestStart("${primaryProvider.displayName} (${getModelForProvider(primaryProvider, settings)})")
+        val primaryResult = executeProviderCall(primaryProvider, primaryKey!!, settings, systemInstruction, conversationPrompt)
+        when (primaryResult) {
+            is CallRestResult.Success -> {
+                clearProviderRuntimeError(primaryProvider)
+                return@withContext primaryResult.outcome
+            }
+            is CallRestResult.Error -> {
+                primaryFailureReason = primaryResult.message
+                recordProviderRuntimeError(primaryProvider, primaryFailureReason)
+            }
+        }
+
+        // If cloud fallback is enabled, only attempt fallback providers that have valid configured keys
+        if (settings.enableCloudFallback) {
+            val fallbackCandidates = listOf(
+                AiProviderType.GEMINI,
+                AiProviderType.GROQ,
+                AiProviderType.OPENAI_COMPATIBLE
+            ).filter { it != primaryProvider }
+
+            for (fallback in fallbackCandidates) {
+                val fallbackKey = getProviderKey(fallback)
+                if (PermissionAuditor.isKeyConfigured(fallbackKey)) {
+                    LatencyTracker.onAiRequestStart("Fallback ${fallback.displayName}")
+                    val fallbackResult = executeProviderCall(fallback, fallbackKey!!, settings, systemInstruction, conversationPrompt)
+                    if (fallbackResult is CallRestResult.Success) {
+                        clearProviderRuntimeError(fallback)
+                        return@withContext fallbackResult.outcome
+                    } else if (fallbackResult is CallRestResult.Error) {
+                        recordProviderRuntimeError(fallback, fallbackResult.message)
                     }
-                    attemptedConfiguredProvider = true
-                    LatencyTracker.onAiRequestStart("Gemini (${settings.geminiModel})")
-                    val result = callGeminiRest(
-                        apiKey = key!!.trim(),
-                        model = settings.geminiModel,
-                        systemInstruction = systemInstruction,
-                        userPrompt = conversationPrompt
-                    )
-                    if (result != null) {
-                        clearProviderRuntimeError(AiProviderType.GEMINI)
-                        return@withContext result
-                    }
-                    lastFailureMessage = "Gemini API request failed or returned an unparseable payload."
-                    recordProviderRuntimeError(AiProviderType.GEMINI, lastFailureMessage)
                 }
-
-                AiProviderType.GROQ -> {
-                    val key = runCatching { BuildConfig.GROQ_API_KEY }.getOrNull()
-                    if (!PermissionAuditor.isKeyConfigured(key)) {
-                        lastFailureMessage = "GROQ_API_KEY is not configured in the AI Studio Secrets panel (.env)."
-                        continue
-                    }
-                    attemptedConfiguredProvider = true
-                    LatencyTracker.onAiRequestStart("Groq (${settings.groqModel})")
-                    val result = callOpenAiCompatibleRest(
-                        endpointUrl = "https://api.groq.com/openai/v1/chat/completions",
-                        apiKey = key!!.trim(),
-                        model = settings.groqModel,
-                        providerLabel = "Groq (${settings.groqModel})",
-                        systemInstruction = systemInstruction,
-                        userPrompt = conversationPrompt
-                    )
-                    if (result != null) {
-                        clearProviderRuntimeError(AiProviderType.GROQ)
-                        return@withContext result
-                    }
-                    lastFailureMessage = "Groq API request failed."
-                    recordProviderRuntimeError(AiProviderType.GROQ, lastFailureMessage)
-                }
-
-                AiProviderType.OPENAI_COMPATIBLE -> {
-                    val key = runCatching { BuildConfig.OPENAI_API_KEY }.getOrNull()
-                    if (!PermissionAuditor.isKeyConfigured(key)) {
-                        lastFailureMessage = "OPENAI_API_KEY is not configured in the AI Studio Secrets panel (.env)."
-                        continue
-                    }
-                    attemptedConfiguredProvider = true
-                    LatencyTracker.onAiRequestStart("OpenAI (${settings.openAiModel})")
-                    val base = settings.openAiBaseUrl.trimEnd('/')
-                    val result = callOpenAiCompatibleRest(
-                        endpointUrl = "$base/chat/completions",
-                        apiKey = key!!.trim(),
-                        model = settings.openAiModel,
-                        providerLabel = "OpenAI (${settings.openAiModel})",
-                        systemInstruction = systemInstruction,
-                        userPrompt = conversationPrompt
-                    )
-                    if (result != null) {
-                        clearProviderRuntimeError(AiProviderType.OPENAI_COMPATIBLE)
-                        return@withContext result
-                    }
-                    lastFailureMessage = "OpenAI-compatible API request failed."
-                    recordProviderRuntimeError(AiProviderType.OPENAI_COMPATIBLE, lastFailureMessage)
-                }
-
-                AiProviderType.OFFLINE_DETERMINISTIC -> Unit
             }
         }
 
         ProviderPlanOutcome.ConfigurationOrNetworkRequired(
-            statusCode = if (attemptedConfiguredProvider) "PROVIDER_RUNTIME_ERROR" else "CONFIGURATION_REQUIRED",
-            message = lastFailureMessage
+            statusCode = "PROVIDER_RUNTIME_ERROR",
+            message = primaryFailureReason
         )
     }
 
-    private fun buildProviderChain(settings: NovaRuntimeSettings): List<AiProviderType> {
-        if (!settings.enableCloudFallback) {
-            return listOf(settings.primaryProvider)
+    fun getProviderKey(provider: AiProviderType): String? {
+        val vaultSecret = context?.let { ProviderSecretVault.getProviderSecretForTransport(it, provider) }
+        if (!vaultSecret.isNullOrBlank()) return vaultSecret
+        val buildConfigKey = when (provider) {
+            AiProviderType.GEMINI -> runCatching { BuildConfig.GEMINI_API_KEY }.getOrNull()
+            AiProviderType.GROQ -> runCatching { BuildConfig.GROQ_API_KEY }.getOrNull()
+            AiProviderType.OPENAI_COMPATIBLE -> runCatching { BuildConfig.OPENAI_API_KEY }.getOrNull()
+            AiProviderType.OFFLINE_DETERMINISTIC -> null
         }
-        return listOf(
-            settings.primaryProvider,
-            AiProviderType.GEMINI,
-            AiProviderType.GROQ,
-            AiProviderType.OPENAI_COMPATIBLE
-        ).distinct()
+        return if (PermissionAuditor.isKeyConfigured(buildConfigKey)) buildConfigKey?.trim() else null
+    }
+
+    private fun getModelForProvider(provider: AiProviderType, settings: NovaRuntimeSettings): String {
+        return when (provider) {
+            AiProviderType.GEMINI -> settings.geminiModel
+            AiProviderType.GROQ -> settings.groqModel
+            AiProviderType.OPENAI_COMPATIBLE -> settings.openAiModel
+            AiProviderType.OFFLINE_DETERMINISTIC -> "offline"
+        }
     }
 
     private fun buildSystemPrompt(
@@ -331,15 +316,62 @@ $memorySection
         return "${history}Current User Request: $userUtterance"
     }
 
+    sealed class CallRestResult {
+        data class Success(val outcome: ProviderPlanOutcome) : CallRestResult()
+        data class Error(val message: String) : CallRestResult()
+    }
+
+    private fun executeProviderCall(
+        provider: AiProviderType,
+        apiKey: String,
+        settings: NovaRuntimeSettings,
+        systemInstruction: String,
+        conversationPrompt: String
+    ): CallRestResult {
+        return when (provider) {
+            AiProviderType.GEMINI -> {
+                callGeminiRest(
+                    apiKey = apiKey,
+                    model = settings.geminiModel,
+                    systemInstruction = systemInstruction,
+                    userPrompt = conversationPrompt
+                )
+            }
+            AiProviderType.GROQ -> {
+                callOpenAiCompatibleRest(
+                    endpointUrl = "https://api.groq.com/openai/v1/chat/completions",
+                    apiKey = apiKey,
+                    model = settings.groqModel,
+                    providerLabel = "Groq (${settings.groqModel})",
+                    systemInstruction = systemInstruction,
+                    userPrompt = conversationPrompt
+                )
+            }
+            AiProviderType.OPENAI_COMPATIBLE -> {
+                val base = settings.openAiBaseUrl.trimEnd('/')
+                callOpenAiCompatibleRest(
+                    endpointUrl = "$base/chat/completions",
+                    apiKey = apiKey,
+                    model = settings.openAiModel,
+                    providerLabel = "OpenAI (${settings.openAiModel})",
+                    systemInstruction = systemInstruction,
+                    userPrompt = conversationPrompt
+                )
+            }
+            AiProviderType.OFFLINE_DETERMINISTIC -> {
+                CallRestResult.Error("Offline local parser active.")
+            }
+        }
+    }
+
     private fun callGeminiRest(
         apiKey: String,
         model: String,
         systemInstruction: String,
         userPrompt: String
-    ): ProviderPlanOutcome? {
-        // Try streaming first to minimize time-to-first-token latency
-        val streamedResult = callGeminiStreaming(apiKey, model, systemInstruction, userPrompt)
-        if (streamedResult != null) return streamedResult
+    ): CallRestResult {
+        val streamResult = callGeminiStreaming(apiKey, model, systemInstruction, userPrompt)
+        if (streamResult is CallRestResult.Success) return streamResult
         return callGeminiNonStreaming(apiKey, model, systemInstruction, userPrompt)
     }
 
@@ -348,7 +380,7 @@ $memorySection
         model: String,
         systemInstruction: String,
         userPrompt: String
-    ): ProviderPlanOutcome? {
+    ): CallRestResult {
         val safeModel = com.example.nova.core.NovaProviderModelConfig.resolveGeminiModelId(
             configuredModelId = model
         )
@@ -359,7 +391,10 @@ $memorySection
                 "parts" to listOf(mapOf("text" to systemInstruction))
             ),
             "contents" to listOf(
-                mapOf("parts" to listOf(mapOf("text" to userPrompt)))
+                mapOf(
+                    "role" to "user",
+                    "parts" to listOf(mapOf("text" to userPrompt))
+                )
             ),
             "generationConfig" to mapOf(
                 "responseMimeType" to "application/json",
@@ -375,8 +410,11 @@ $memorySection
 
         return try {
             okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return null
-                val source = response.body?.source() ?: return null
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string().orEmpty()
+                    return CallRestResult.Error(parseGeminiErrorBody(errorBody, response.code))
+                }
+                val source = response.body?.source() ?: return CallRestResult.Error("Gemini response stream was empty.")
                 val fullTextBuilder = StringBuilder()
 
                 while (!source.exhausted()) {
@@ -401,13 +439,18 @@ $memorySection
                 LatencyTracker.onCompleteAiResponse()
                 val fullText = fullTextBuilder.toString().trim()
                 if (fullText.isNotBlank()) {
-                    parseModelJsonDecision(fullText, "Gemini ($safeModel)")
+                    val outcome = parseModelJsonDecision(fullText, "Gemini ($safeModel)")
+                    if (outcome != null) {
+                        CallRestResult.Success(outcome)
+                    } else {
+                        CallRestResult.Error("Gemini output could not be parsed into a structured response.")
+                    }
                 } else {
-                    null
+                    CallRestResult.Error("Gemini stream completed with empty content.")
                 }
             }
-        } catch (_: Exception) {
-            null
+        } catch (e: Exception) {
+            CallRestResult.Error("Gemini network error: ${e.message ?: "Connection failed"}")
         }
     }
 
@@ -417,7 +460,7 @@ $memorySection
         model: String,
         systemInstruction: String,
         userPrompt: String
-    ): ProviderPlanOutcome? {
+    ): CallRestResult {
         val safeModel = com.example.nova.core.NovaProviderModelConfig.resolveGeminiModelId(
             configuredModelId = model
         )
@@ -428,7 +471,10 @@ $memorySection
                 "parts" to listOf(mapOf("text" to systemInstruction))
             ),
             "contents" to listOf(
-                mapOf("parts" to listOf(mapOf("text" to userPrompt)))
+                mapOf(
+                    "role" to "user",
+                    "parts" to listOf(mapOf("text" to userPrompt))
+                )
             ),
             "generationConfig" to mapOf(
                 "responseMimeType" to "application/json",
@@ -444,22 +490,69 @@ $memorySection
 
         return try {
             okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return null
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string().orEmpty()
+                    return CallRestResult.Error(parseGeminiErrorBody(errorBody, response.code))
+                }
                 LatencyTracker.onFirstAiToken()
                 val bodyStr = response.body?.string().orEmpty()
-                if (bodyStr.isBlank()) return null
+                if (bodyStr.isBlank()) return CallRestResult.Error("Gemini returned empty body.")
 
-                val root = mapAdapter.fromJson(bodyStr) ?: return null
+                val root = mapAdapter.fromJson(bodyStr) ?: return CallRestResult.Error("Gemini returned non-JSON payload.")
                 val candidates = root["candidates"] as? List<Map<String, Any?>>
                 val content = candidates?.firstOrNull()?.get("content") as? Map<String, Any?>
                 val parts = content?.get("parts") as? List<Map<String, Any?>>
                 val text = parts?.firstOrNull()?.get("text")?.toString().orEmpty()
 
                 LatencyTracker.onCompleteAiResponse()
-                parseModelJsonDecision(text, "Gemini ($safeModel)")
+                val outcome = parseModelJsonDecision(text, "Gemini ($safeModel)")
+                if (outcome != null) {
+                    CallRestResult.Success(outcome)
+                } else {
+                    CallRestResult.Error("Gemini response could not be parsed into a valid command or answer.")
+                }
+            }
+        } catch (e: Exception) {
+            CallRestResult.Error("Gemini network error: ${e.message ?: "Connection failed"}")
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun parseGeminiErrorBody(rawBody: String, httpCode: Int): String {
+        if (rawBody.isBlank()) return "Gemini request failed (HTTP $httpCode)."
+        return try {
+            val root = mapAdapter.fromJson(rawBody)
+            val errorObj = root?.get("error") as? Map<String, Any?>
+            val rawMsg = errorObj?.get("message")?.toString()?.trim()
+            val status = errorObj?.get("status")?.toString()?.trim()
+            val sanitized = SensitiveDataRedactor.redactText(rawMsg ?: status ?: "HTTP $httpCode").redactedText
+            when (httpCode) {
+                400 -> "Gemini API error (HTTP 400 Bad Request): $sanitized"
+                401, 403 -> "Gemini API authentication failed (HTTP $httpCode): Verify your GEMINI_API_KEY in AI Studio Secrets (.env) or Settings."
+                404 -> "Gemini model or endpoint not found (HTTP 404): $sanitized"
+                429 -> "Gemini API quota or rate limit reached (HTTP 429): $sanitized"
+                else -> "Gemini request failed (HTTP $httpCode): $sanitized"
             }
         } catch (_: Exception) {
-            null
+            "Gemini request failed (HTTP $httpCode)."
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun parseOpenAiErrorBody(rawBody: String, httpCode: Int, providerLabel: String): String {
+        if (rawBody.isBlank()) return "$providerLabel request failed (HTTP $httpCode)."
+        return try {
+            val root = mapAdapter.fromJson(rawBody)
+            val errorObj = root?.get("error") as? Map<String, Any?>
+            val rawMsg = errorObj?.get("message")?.toString()?.trim()
+            val sanitized = SensitiveDataRedactor.redactText(rawMsg ?: "HTTP $httpCode").redactedText
+            when (httpCode) {
+                401 -> "$providerLabel authentication failed (HTTP 401): Invalid API key."
+                429 -> "$providerLabel rate limit or quota exceeded (HTTP 429)."
+                else -> "$providerLabel request failed (HTTP $httpCode): $sanitized"
+            }
+        } catch (_: Exception) {
+            "$providerLabel request failed (HTTP $httpCode)."
         }
     }
 
@@ -471,7 +564,7 @@ $memorySection
         providerLabel: String,
         systemInstruction: String,
         userPrompt: String
-    ): ProviderPlanOutcome? {
+    ): CallRestResult {
         val payloadMap = mapOf(
             "model" to model,
             "messages" to listOf(
@@ -492,16 +585,41 @@ $memorySection
 
         return try {
             okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return null
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string().orEmpty()
+                    return CallRestResult.Error(parseOpenAiErrorBody(errorBody, response.code, providerLabel))
+                }
                 val bodyStr = response.body?.string().orEmpty()
-                if (bodyStr.isBlank()) return null
+                if (bodyStr.isBlank()) return CallRestResult.Error("$providerLabel returned empty body.")
 
-                val root = mapAdapter.fromJson(bodyStr) ?: return null
+                val root = mapAdapter.fromJson(bodyStr) ?: return CallRestResult.Error("$providerLabel returned non-JSON payload.")
                 val choices = root["choices"] as? List<Map<String, Any?>>
                 val message = choices?.firstOrNull()?.get("message") as? Map<String, Any?>
                 val content = message?.get("content")?.toString().orEmpty()
 
-                parseModelJsonDecision(content, providerLabel)
+                val outcome = parseModelJsonDecision(content, providerLabel)
+                if (outcome != null) {
+                    CallRestResult.Success(outcome)
+                } else {
+                    CallRestResult.Error("$providerLabel response could not be parsed.")
+                }
+            }
+        } catch (e: Exception) {
+            CallRestResult.Error("$providerLabel network error: ${e.message ?: "Connection failed"}")
+        }
+    }
+
+    suspend fun fetchSupportedGeminiModels(apiKey: String): List<String>? = withContext(Dispatchers.IO) {
+        val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey"
+        val request = Request.Builder().url(url).get().build()
+        try {
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val body = response.body?.string().orEmpty()
+                @Suppress("UNCHECKED_CAST")
+                val root = mapAdapter.fromJson(body) ?: return@withContext null
+                val models = root["models"] as? List<Map<String, Any?>>
+                models?.mapNotNull { it["name"]?.toString()?.removePrefix("models/") }?.filter { it.startsWith("gemini") }
             }
         } catch (_: Exception) {
             null
@@ -514,11 +632,19 @@ $memorySection
         providerLabel: String
     ): ProviderPlanOutcome? {
         if (rawJsonText.isBlank()) return null
-        val cleaned = rawJsonText
-            .removePrefix("```json")
-            .removePrefix("```")
-            .removeSuffix("```")
-            .trim()
+        val trimmed = rawJsonText.trim()
+        val cleaned = if (trimmed.contains("```")) {
+            val withoutPrefix = trimmed.substringAfter("```json", trimmed.substringAfter("```"))
+            withoutPrefix.substringBeforeLast("```").trim()
+        } else {
+            val startIdx = trimmed.indexOf('{')
+            val endIdx = trimmed.lastIndexOf('}')
+            if (startIdx in 0..endIdx) {
+                trimmed.substring(startIdx, endIdx + 1).trim()
+            } else {
+                trimmed
+            }
+        }
 
         return try {
             val obj = mapAdapter.fromJson(cleaned) ?: return null

@@ -89,6 +89,7 @@ object PermissionAuditor {
         return trimmed != "MY_GEMINI_API_KEY" &&
             trimmed != "MY_GROQ_API_KEY" &&
             trimmed != "MY_OPENAI_API_KEY" &&
+            trimmed != "MY_ELEVENLABS_API_KEY" &&
             !trimmed.startsWith("YOUR_") &&
             trimmed.length >= 10
     }

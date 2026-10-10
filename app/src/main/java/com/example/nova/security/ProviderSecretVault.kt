@@ -197,6 +197,18 @@ object ProviderSecretVault {
         return storeEncryptedSecretIfSupported(context, provider, plaintextSecret.trim())
     }
 
+    internal fun getProviderSecretForTransport(context: Context, provider: AiProviderType): String? {
+        val fromVault = decryptVaultSecretForInternalTransportOnly(context, provider)
+        if (!fromVault.isNullOrBlank()) return fromVault
+        val buildConfigKey = when (provider) {
+            AiProviderType.GEMINI -> runCatching { BuildConfig.GEMINI_API_KEY }.getOrNull()
+            AiProviderType.GROQ -> runCatching { BuildConfig.GROQ_API_KEY }.getOrNull()
+            AiProviderType.OPENAI_COMPATIBLE -> runCatching { BuildConfig.OPENAI_API_KEY }.getOrNull()
+            AiProviderType.OFFLINE_DETERMINISTIC -> null
+        }
+        return if (PermissionAuditor.isKeyConfigured(buildConfigKey)) buildConfigKey?.trim() else null
+    }
+
     internal fun getElevenLabsSecretForTransport(context: Context): String? {
         val fromVault = decryptVaultCustomSecret(context, "ELEVENLABS")
         if (!fromVault.isNullOrBlank()) return fromVault

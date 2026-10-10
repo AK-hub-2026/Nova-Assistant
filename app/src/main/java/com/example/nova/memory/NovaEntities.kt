@@ -46,3 +46,19 @@ data class ScheduledReminderEntity(
     val isCompleted: Boolean = false,
     val createdAtMs: Long = System.currentTimeMillis()
 )
+
+@Entity(tableName = "voice_session_logs")
+data class VoiceSessionLogEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionType: String, // "LIVE_SESSION", "PUSH_TO_TALK", "TEXT_TURN"
+    val userUtterance: String,
+    val assistantResponse: String,
+    val sttEngine: String = "Android SpeechRecognizer",
+    val ttsProvider: String = "ElevenLabs",
+    val voiceId: String = "Rachel",
+    val ttsStatus: String = "SYNTHESIZED", // "SYNTHESIZED", "FALLBACK_TO_TTS", "TTS_ONLY", "MUTED", "ERROR"
+    val latencyMs: Long = 0L,
+    val errorMessage: String = "",
+    val timestampMs: Long = System.currentTimeMillis()
+)
+

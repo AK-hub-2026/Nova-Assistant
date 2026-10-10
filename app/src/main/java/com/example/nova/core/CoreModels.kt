@@ -23,6 +23,12 @@ enum class AiProviderType(val displayName: String, val defaultModel: String) {
     OFFLINE_DETERMINISTIC("Local Deterministic Intent Parser (Offline)", "nova-local-rules-v1")
 }
 
+enum class VoiceTtsProvider(val displayName: String) {
+    ELEVEN_LABS("ElevenLabs Text-to-Speech"),
+    ANDROID_TTS("Android System TextToSpeech")
+}
+
+
 enum class RiskLevel {
     SAFE,
     SENSITIVE_CONFIRM,
