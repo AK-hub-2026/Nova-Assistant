@@ -711,12 +711,12 @@ class NovaAgentOrchestrator(
         }
     }
 
-    fun submitUserCommand(rawCommand: String) {
+    fun submitUserCommand(rawCommand: String): Job? {
         val command = rawCommand.trim()
-        if (command.isBlank()) return
+        if (command.isBlank()) return null
 
         planningJob?.cancel()
-        planningJob = scope.launch {
+        val job = scope.launch {
             val hasRunningOrPending = activeTasks.value.any { !it.status.isTerminal }
             if (!hasRunningOrPending) {
                 _lastVerifiedResult.value = null
@@ -830,6 +830,8 @@ class NovaAgentOrchestrator(
                 }
             }
         }
+        planningJob = job
+        return job
     }
 
     /**

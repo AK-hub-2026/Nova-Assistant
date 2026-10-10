@@ -287,7 +287,7 @@ class ExampleRobolectricTest {
             }
             assertEquals(com.example.nova.core.VerificationOutcome.VERIFIED_SUCCESS, result.outcome)
             assertNotNull(executor.latestDeviceInfo.value)
-            assertEquals(36, executor.latestDeviceInfo.value?.sdkInt?.valueOrNull())
+            assertEquals(android.os.Build.VERSION.SDK_INT, executor.latestDeviceInfo.value?.sdkInt?.valueOrNull())
             assertTrue(executor.latestDeviceInfo.value?.totalStorageBytes?.isAvailable == true)
         } finally {
             org.robolectric.shadows.ShadowStatFs.reset()
@@ -571,7 +571,8 @@ class ExampleRobolectricTest {
             // Submit Scenario S compound request: "Show my photos and device information."
             // On Robolectric without media permissions granted, Photo Task -> PERMISSION_REQUIRED
             // and Device Info Task -> COMPLETED_VERIFIED independently.
-            orchestrator.submitUserCommand("Show my photos and device information.")
+            val planJob = orchestrator.submitUserCommand("Show my photos and device information.")
+            planJob?.join()
 
             var attempts = 0
             while (
